@@ -80,6 +80,61 @@ class PhysicsAttention(nn.Module):
 
         return self.out_proj(out)
 
+class TransolverBlock(nn.Module):
+    """ One Pre-LN Transolver layer"""
+
+    def __init__(
+            self,
+            c_hidden: int,
+            n_slices: int,
+            n_heads: int=8,
+            mlp_ratio: int=2,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(c_hidden)
+        self.attn = PhysicsAttention(c_hidden, n_slices, n_heads)
+        self.norm2 = nn.LayerNorm(c_hidden)
+        self.ffn = nn.Sequential(
+            nn.Linear(c_hidden, c_hidden * mlp_ratio),
+            nn.GELU(),
+            nn.Linear(c_hidden * mlp_ratio, c_hidden)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
+        return x
+
+class Transolver(nn.Module):
+    """Full transolver model for PDEs"""
+
+    def __init__(
+            self,
+            c_g: int,
+            c_u: int, 
+            c_out: int,
+            c_hidden: int=128,
+            n_layers: int=8,
+            n_heads: int=8,
+            n_slices: int=32,
+            mlp_ratio: int=2,
+    ):
+        super().__init__()
+        self.embed = InputEmbedding(c_g, c_u, c_hidden)
+        self.blocks = nn.ModuleList(
+            [TransolverBlock(c_hidden, n_slices, n_heads, mlp_ratio) 
+                for _ in range(n_layers)]
+        )
+        self.final_norm = nn.LayerNorm(c_hidden)
+        self.head = nn.Linear(c_hidden, c_out)
+
+    def forward(self, g: torch.Tensor, u: torch.Tensor | None = None) -> torch.Tensor:
+        x = self.embed(g, u)
+        for block in self.blocks:
+            x = block(x)
+        x = self.final_norm(x)
+        return self.head(x)
 
 if __name__ == "__main__":
     B, N, c_g, c_u, c_hidden = 2, 25000, 3, 2, 128
@@ -105,3 +160,14 @@ if __name__ == "__main__":
     print("PhysicsAttention output shape: ", x_out.shape)
 
     print("panel 0, head 0, node 0 weight sum: ", weights[0, 0, 0].sum().item())
+
+    # Full Transolver predicting [dx, dy, dz, final_thickness] at every FEM node
+    model = Transolver(
+        c_g=3, c_u=2, c_out=4,
+        c_hidden=128, n_layers=8, n_heads=8, n_slices=32,
+    )
+    n_params = sum(p.numel() for p in model.parameters())
+    pred = model(g, u)
+
+    print("Total parameters  :", f"{n_params:,}")
+    print("Forming pred shape:", pred.shape)
