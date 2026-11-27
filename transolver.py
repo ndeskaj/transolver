@@ -22,29 +22,38 @@ class InputEmbedding(nn.Module):
         return self.proj(x)
 
 class PhysicsAttention(nn.Module):
-    """ PhysicsAttention starting single-head"""
+    """ PhysicsAttention starting multi-head version"""
 
-    def __init__(self, c_hidden: int, n_slices: int):
+    def __init__(self, c_hidden: int, n_slices: int, n_heads: int = 8):
         super().__init__()
         self.n_slices = n_slices
         self.c_hidden = c_hidden
-        self.slice_proj = nn.Linear(c_hidden, n_slices)
+        self.n_heads = n_heads
+        self.head_dim = c_hidden // n_heads
+        self.slice_proj = nn.Linear(self.head_dim, n_slices)
 
-        self.scale = c_hidden ** -0.5
+        self.in_proj = nn.Linear(c_hidden, c_hidden)
 
-        self.to_q = nn.Linear(c_hidden ,c_hidden, bias=False)
-        self.to_k = nn.Linear(c_hidden ,c_hidden, bias=False)
-        self.to_v = nn.Linear(c_hidden ,c_hidden, bias=False)
+        self.scale = self.head_dim ** -0.5
+
+        self.to_q = nn.Linear(self.head_dim ,self.head_dim, bias=False)
+        self.to_k = nn.Linear(self.head_dim ,self.head_dim, bias=False)
+        self.to_v = nn.Linear(self.head_dim ,self.head_dim, bias=False)
 
         self.out_proj = nn.Linear(c_hidden ,c_hidden)
 
     def encode_slices(self, x: torch.Tensor):
 
-        slice_weigths = torch.softmax(self.slice_proj(x), dim=-1)
+        B, N, C = x.shape
 
-        weights_t = slice_weigths.transpose(1, 2)
+        x_heads = self.in_proj(x).reshape(B, N, self.n_heads, self.head_dim)
+        x_heads = x_heads.transpose(1, 2)
 
-        slice_tokens = weights_t @ x
+        slice_weigths = torch.softmax(self.slice_proj(x_heads), dim=-1)
+
+        weights_t = slice_weigths.transpose(-2, -1)
+
+        slice_tokens = weights_t @ x_heads
 
         slice_norm = weights_t.sum(dim=-1, keepdim=True)
         slice_tokens = slice_tokens / (slice_norm + 1e-5)
@@ -52,6 +61,8 @@ class PhysicsAttention(nn.Module):
         return slice_tokens, slice_weigths
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        B, N, C = x.shape
 
         slice_tokens, slice_weights = self.encode_slices(x)
 
@@ -65,6 +76,7 @@ class PhysicsAttention(nn.Module):
         updated_tokens = attn_weights @ v
 
         out = slice_weights @ updated_tokens
+        out = out.transpose(1, 2).reshape(B, N, C)
 
         return self.out_proj(out)
 
@@ -91,3 +103,5 @@ if __name__ == "__main__":
 
     x_out = attn(x0)
     print("PhysicsAttention output shape: ", x_out.shape)
+
+    print("panel 0, head 0, node 0 weight sum: ", weights[0, 0, 0].sum().item())
