@@ -38,7 +38,7 @@ class PhysicsAttention(nn.Module):
         slice_tokens = weights_t @ x
 
         slice_norm = weights_t.sum(dim=-1, keepdim=True)
-        slice_tokens = slice_tokens / (slice_norm - 1e-5)
+        slice_tokens = slice_tokens / (slice_norm + 1e-5)
 
         return slice_tokens, slice_weigths
 
