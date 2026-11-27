@@ -21,8 +21,29 @@ class InputEmbedding(nn.Module):
 
         return self.proj(x)
 
+class PhysicsAttention(nn.Module):
+    """ PhysicsAttention starting single-head"""
+
+    def __init__(self, c_hidden: int, n_slices: int):
+        super().__init__()
+        self.n_slices = n_slices
+        self.slice_proj = nn.Linear(c_hidden, n_slices)
+
+    def encode_slices(self, x: torch.Tensor):
+
+        slice_weigths = torch.softmax(self.slice_proj(x), dim=-1)
+
+        weights_t = slice_weigths.transpose(1, 2)
+
+        slice_tokens = weights_t @ x
+
+        slice_norm = weights_t.sum(dim=-1, keepdim=True)
+        slice_tokens = slice_tokens / (slice_norm - 1e-5)
+
+        return slice_tokens, slice_weigths
+
 if __name__ == "__main__":
-    B, N, c_g, c_u, c_hidden = 2, 500, 3, 2, 128
+    B, N, c_g, c_u, c_hidden = 2, 25000, 3, 2, 128
 
     g = torch.randn(B, N, c_g)
     u = torch.randn(B, N, c_u)
@@ -33,3 +54,10 @@ if __name__ == "__main__":
     print("g shape: ", g.shape)
     print("u shape: ", u.shape)
     print("x0 shape: ", x0.shape)
+
+    attn = PhysicsAttention(c_hidden=c_hidden, n_slices=32)
+    tokens, weights = attn.encode_slices(x0)
+
+    print("slice_weights shape: ", weights.shape)
+    print("slice_tokens shape: ", tokens.shape)
+    print("node 0 weight sum: ", weights[0, 0].sum().item())
